@@ -6,14 +6,14 @@ from collections import OrderedDict
 from torch.nn import init
 
 
-def conv3x3(in_channels, out_channels, stride=1, 
-            padding=1, bias=True, groups=1):    
+def conv3x3(in_channels, out_channels, stride=1,
+            padding=1, bias=True, groups=1):
     """3x3 convolution with padding
     """
     return nn.Conv2d(
-        in_channels, 
-        out_channels, 
-        kernel_size=3, 
+        in_channels,
+        out_channels,
+        kernel_size=3,
         stride=stride,
         padding=padding,
         bias=bias,
@@ -26,9 +26,9 @@ def conv1x1(in_channels, out_channels, groups=1):
     - Grouped pointwise convolution when groups > 1
     """
     return nn.Conv2d(
-        in_channels, 
-        out_channels, 
-        kernel_size=1, 
+        in_channels,
+        out_channels,
+        kernel_size=1,
         groups=groups,
         stride=1)
 
@@ -37,10 +37,10 @@ def channel_shuffle(x, groups):
     batchsize, num_channels, height, width = x.data.size()
 
     channels_per_group = num_channels // groups
-    
+
     # reshape
-    x = x.view(batchsize, groups, 
-        channels_per_group, height, width)
+    x = x.view(batchsize, groups,
+               channels_per_group, height, width)
 
     # transpose
     # - contiguous() required if transpose() is used before view().
@@ -56,7 +56,7 @@ def channel_shuffle(x, groups):
 class ShuffleUnit(nn.Module):
     def __init__(self, in_channels, out_channels, groups=3,
                  grouped_conv=True, combine='add'):
-        
+
         super(ShuffleUnit, self).__init__()
 
         self.in_channels = in_channels
@@ -75,7 +75,7 @@ class ShuffleUnit(nn.Module):
             # ShuffleUnit Figure 2c
             self.depthwise_stride = 2
             self._combine_func = self._concat
-            
+
             # ensure output of concat has the same channels as 
             # original output channels.
             self.out_channels -= self.in_channels
@@ -95,7 +95,7 @@ class ShuffleUnit(nn.Module):
             self.first_1x1_groups,
             batch_norm=True,
             relu=True
-            )
+        )
 
         # 3x3 depthwise convolution followed by batch normalization
         self.depthwise_conv3x3 = conv3x3(
@@ -111,23 +111,20 @@ class ShuffleUnit(nn.Module):
             self.groups,
             batch_norm=True,
             relu=False
-            )
-
+        )
 
     @staticmethod
     def _add(x, out):
         # residual connection
         return x + out
 
-
     @staticmethod
     def _concat(x, out):
         # concatenate along channel axis
         return torch.cat((x, out), 1)
 
-
     def _make_grouped_conv1x1(self, in_channels, out_channels, groups,
-        batch_norm=True, relu=False):
+                              batch_norm=True, relu=False):
 
         modules = OrderedDict()
 
@@ -143,21 +140,20 @@ class ShuffleUnit(nn.Module):
         else:
             return conv
 
-
     def forward(self, x):
         # save for combining later with output
         residual = x
 
         if self.combine == 'concat':
-            residual = F.avg_pool2d(residual, kernel_size=3, 
-                stride=2, padding=1)
+            residual = F.avg_pool2d(residual, kernel_size=3,
+                                    stride=2, padding=1)
 
         out = self.g_conv_1x1_compress(x)
         out = channel_shuffle(out, self.groups)
         out = self.depthwise_conv3x3(out)
         out = self.bn_after_depthwise(out)
         out = self.g_conv_1x1_expand(out)
-        
+
         out = self._combine_func(residual, out)
         return F.relu(out)
 
@@ -166,7 +162,7 @@ class ShuffleNet(nn.Module):
     """ShuffleNet implementation.
     """
 
-    def __init__(self, groups=3, in_channels=3, num_classes=1000):
+    def __init__(self, groups=3, in_channels=3, scale=1.0, num_classes=1000):
         """ShuffleNet constructor.
 
         Arguments:
@@ -182,8 +178,9 @@ class ShuffleNet(nn.Module):
         super(ShuffleNet, self).__init__()
 
         self.groups = groups
+        self.scale = scale
         self.stage_repeats = [3, 7, 3]
-        self.in_channels =  in_channels
+        self.in_channels = in_channels
         self.num_classes = num_classes
 
         # index 0 is invalid and should never be called.
@@ -202,10 +199,12 @@ class ShuffleNet(nn.Module):
             raise ValueError(
                 """{} groups is not supported for
                    1x1 Grouped Convolutions""".format(num_groups))
-        
+
+        self.stage_out_channels[2:] = [int(channel_num * self.scale) for channel_num in self.stage_out_channels[2:]]
+
         # Stage 1 always has 24 output channels
         self.conv1 = conv3x3(self.in_channels,
-                             self.stage_out_channels[1], # stage 1
+                             self.stage_out_channels[1],  # stage 1
                              stride=2)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
@@ -225,7 +224,6 @@ class ShuffleNet(nn.Module):
         self.fc = nn.Linear(num_inputs, self.num_classes)
         self.init_params()
 
-
     def init_params(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -240,40 +238,38 @@ class ShuffleNet(nn.Module):
                 if m.bias is not None:
                     init.constant(m.bias, 0)
 
-
     def _make_stage(self, stage):
         modules = OrderedDict()
         stage_name = "ShuffleUnit_Stage{}".format(stage)
-        
+
         # First ShuffleUnit in the stage
         # 1. non-grouped 1x1 convolution (i.e. pointwise convolution)
         #   is used in Stage 2. Group convolutions used everywhere else.
         grouped_conv = stage > 2
-        
+
         # 2. concatenation unit is always used.
         first_module = ShuffleUnit(
-            self.stage_out_channels[stage-1],
+            self.stage_out_channels[stage - 1],
             self.stage_out_channels[stage],
             groups=self.groups,
             grouped_conv=grouped_conv,
             combine='concat'
-            )
-        modules[stage_name+"_0"] = first_module
+        )
+        modules[stage_name + "_0"] = first_module
 
         # add more ShuffleUnits depending on pre-defined number of repeats
-        for i in range(self.stage_repeats[stage-2]):
-            name = stage_name + "_{}".format(i+1)
+        for i in range(self.stage_repeats[stage - 2]):
+            name = stage_name + "_{}".format(i + 1)
             module = ShuffleUnit(
                 self.stage_out_channels[stage],
                 self.stage_out_channels[stage],
                 groups=self.groups,
                 grouped_conv=True,
                 combine='add'
-                )
+            )
             modules[name] = module
 
         return nn.Sequential(modules)
-
 
     def forward(self, x):
         x = self.conv1(x)
@@ -285,12 +281,11 @@ class ShuffleNet(nn.Module):
 
         # global average pooling layer
         x = F.avg_pool2d(x, x.data.size()[-2:])
-        
+
         # flatten for input to fully-connected layer
         x = x.view(x.size(0), -1)
         x = self.fc(x)
-
-        return F.log_softmax(x)
+        return F.log_softmax(x)  # , dim=1)
 
 
 if __name__ == "__main__":
