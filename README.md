@@ -2,7 +2,7 @@
 An implementation of `ShuffleNet` in PyTorch. `ShuffleNet` is an efficient convolutional neural network architecture for mobile devices. According to the paper, it outperforms Google's MobileNet by a small percentage.
 
 ## What is ShuffleNet?
-In one sentence, `ShuffleNet` is a ResNet-like model that uses residual blocks (called `ShuffleUnits`), with the main innovation being the use of pointwise, or 1x1, *group* convolutions as opposed to normal pointwise convolutions.
+In one sentence, `ShuffleNet` is a ResNet-like model that uses residual blocks (called `ShuffleUnits`), with the main innovation being the use of pointwise, or 1x1, *group* convolutions as opposed to normal pointwise convolutions. See [paper](In one sentence, `ShuffleNet` is a ResNet-like model that uses residual blocks (called `ShuffleUnits`), with the main innovation being the use of pointwise, or 1x1, *group* convolutions as opposed to normal pointwise convolutions. See [paper](https://arxiv.org/abs/1707.01083) for more details.
 
 ## Usage
 Clone the repo:
