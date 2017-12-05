@@ -162,7 +162,7 @@ class ShuffleNet(nn.Module):
     """ShuffleNet implementation.
     """
 
-    def __init__(self, groups=3, in_channels=3, scale=1.0, num_classes=1000):
+    def __init__(self, groups=3, in_channels=3, scale=1.0, num_classes=1000, arch2=False):
         """ShuffleNet constructor.
 
         Arguments:
@@ -179,7 +179,8 @@ class ShuffleNet(nn.Module):
 
         self.groups = groups
         self.scale = scale
-        self.stage_repeats = [3, 7, 3]
+        self.arch2 = arch2
+        self.stage_repeats = [3, 5, 3] if self.arch2 else [3, 7, 3]
         self.in_channels = in_channels
         self.num_classes = num_classes
 
@@ -198,8 +199,10 @@ class ShuffleNet(nn.Module):
         else:
             raise ValueError(
                 """{} groups is not supported for
-                   1x1 Grouped Convolutions""".format(num_groups))
+                   1x1 Grouped Convolutions""".format(self.groups))
+        # TODO: arch2 - increase width to maintain total complexity
 
+        # Scale
         self.stage_out_channels[2:] = [int(channel_num * self.scale) for channel_num in self.stage_out_channels[2:]]
 
         # Stage 1 always has 24 output channels
