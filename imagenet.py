@@ -1,5 +1,6 @@
 import argparse
 import os
+import shutil
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -17,32 +18,44 @@ from model import ShuffleNet
 
 parser = argparse.ArgumentParser(description='PyTorch ConvNet Training')
 parser.add_argument('--dataroot', required=True, help='Path to ImageNet train and val folders, preprocessed '
-                                                      'as described in https://github.com/facebook/fb.resnet.torch/blob/master/INSTALL.md#download-the-imagenet-dataset')
+                                                      'as described in '
+                                                      'https://github.com/facebook/fb.resnet.torch/blob/master/INSTALL.md#download-the-imagenet-dataset')
 parser.add_argument('--gpus', default='0', help='gpus used for training - e.g 0,1,3')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--type', default='torch.cuda.FloatTensor', help='type of tensor - e.g torch.cuda.HalfTensor')
 # Optimization options
 parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
+parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch-size', default=256, type=int, metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.1, help='The Learning Rate.')
 parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--decay', '-d', type=float, default=4e-5, help='Weight decay (L2 penalty).')
-parser.add_argument('--test_bs', type=int, default=10)
 parser.add_argument('--schedule', type=int, nargs='+', default=[150, 225],
                     help='Decrease learning rate at these epochs.')
 parser.add_argument('--gamma', type=float, default=0.1, help='LR is multiplied by gamma on schedule.')
 
 parser.add_argument('-e', '--evaluate', type=str, metavar='FILE', help='evaluate model FILE on validation set')
 # Checkpoints
-parser.add_argument('--save', '-s', type=str, default='./', help='Folder to save checkpoints.')
-parser.add_argument('--load', '-l', type=str, help='Checkpoint path to resume / test.')
-parser.add_argument('--results_dir', metavar='RESULTS_DIR', default='./results', help='results dir')
+parser.add_argument('--save', '-s', type=str, default='', help='Folder to save checkpoints.')
+parser.add_argument('--results_dir', metavar='RESULTS_DIR', default='./results', help='Directory to store results')
+parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
+parser.add_argument('--log-interval', type=int, default=100, metavar='N', help='Number of batches between log messages')
 
-parser.add_argument('--log-interval', type=int, default=50, metavar='N',
-                    help='how many batches to wait before logging training status')
+# Architecture
+parser.add_argument('--groups', type=int, default=8, metavar='g', help='Number of groups in ShuffleNet (default 8).')
+parser.add_argument('--scaling', type=float, default=0.25, metavar='s', help='Scaling of ShuffleNet (default x0.25).')
 
 args = parser.parse_args()
+
+
+def save_checkpoint(state, is_best, filepath='./', filename='checkpoint.pth.tar'):
+    save_path = os.path.join(filepath, filename)
+    best_path = os.path.join(filepath, 'model_best.pth.tar')
+    torch.save(state, save_path)
+    if is_best:
+        shutil.copyfile(save_path, best_path)
+
 
 __imagenet_stats = {'mean': [0.485, 0.456, 0.406],
                     'std': [0.229, 0.224, 0.225]}
@@ -106,7 +119,7 @@ def main():
         args.gpus = None
 
     # running on ImageNet
-    model = ShuffleNet(num_classes=1000, scale=0.5, groups=8, in_channels=3)
+    model = ShuffleNet(num_classes=1000, scale=args.scaling, groups=args.groups, in_channels=3)
     num_parameters = sum([l.nelement() for l in model.parameters()])
     print('number of parameters: {}'.format(num_parameters))
     print(model)
@@ -116,23 +129,33 @@ def main():
     criterion.type(args.type)
     model.type(args.type)
 
-    # optionally resume from a checkpoint
-    if args.evaluate:
-        if not os.path.isfile(args.evaluate):
-            parser.error('invalid checkpoint: {}'.format(args.evaluate))
-        checkpoint = torch.load(args.evaluate)
-        model.load_state_dict(checkpoint['state_dict'])
-        print("loaded checkpoint '{}'".format(args.evaluate))
-
     optimizer = torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.decay,
                                 nesterov=True)
-
-    if args.gpus and len(args.gpus) > 1:
-        model = torch.nn.DataParallel(model, args.gpus)
 
     best_test = 0
     train_acc = []
     test_acc = []
+
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            args.start_epoch = checkpoint['epoch']
+            best_test = checkpoint['best_prec1']
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
+
+    if args.gpus and len(args.gpus) > 1:
+        model = torch.nn.DataParallel(model, args.gpus)
+
+    if args.evaluate:
+        test(model, criterion)
+        return
     for epoch in trange(1, args.epochs + 1):
         if epoch in args.schedule:
             args.learning_rate *= args.gamma
@@ -143,9 +166,10 @@ def main():
 
         train_acc.append(train_accuracy)
         test_acc.append(test_accuracy)
+        save_checkpoint({'epoch': epoch + 1, 'state_dict': model.state_dict(), 'best_prec1': best_test,
+                         'optimizer': optimizer.state_dict()}, test_accuracy > best_test, filepath=save_path)
         if test_accuracy > best_test:
             best_test = test_accuracy
-            torch.save(model.state_dict(), os.path.join(args.save, 'model.pytorch'))
         tqdm.write('Train: \n{}\nVal:\n{}\n'.format(train_acc, test_acc))
 
 
